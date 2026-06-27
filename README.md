@@ -2,10 +2,27 @@
 
 A reusable gamified focus and anti-doomscroll productivity engine for Flutter.
 
-`focus_quest` gives app developers the business logic for focus sessions,
-rewards, streaks, levels, statistics, persistence, lifecycle handling, optional
-feedback, and Riverpod state. You bring the UI: a virtual pet, garden, study
-timer, charity tracker, team focus tool, or any other game layer.
+`focus_quest` provides the core logic needed to build Pomodoro apps, study
+timers, habit trackers, digital wellbeing tools, virtual pet focus apps,
+virtual garden apps, and other gamified productivity experiences. The package
+handles focus sessions, countdown state, rewards, streaks, persistence,
+lifecycle behavior, optional feedback, and Riverpod integration while leaving
+the app developer free to design any UI, theme, game world, or reward system.
+
+## Why use focus_quest?
+
+Building a focus app usually requires more than a timer. Apps need accurate
+pause and resume behavior, restore support after app restarts, background
+interruption handling, local history, streaks, points, XP, and clean state
+management. `focus_quest` packages those pieces as reusable business logic so
+you can spend more time building the experience your users see.
+
+It is especially useful for anti-doomscroll apps where staying away from the
+phone can grow a virtual forest, feed a pet, unlock collectibles, or record
+charity-progress metadata.
+
+The package tracks app-level focus sessions. It does not block, inspect, or
+monitor other installed apps.
 
 ## Features
 
@@ -17,24 +34,24 @@ timer, charity tracker, team focus tool, or any other game layer.
 - In-memory, SharedPreferences-backed, and Hive-backed local persistence
 - Storage abstraction for custom Isar, SQLite, secure storage, or backend adapters
 - Riverpod notifier and immutable state for Flutter apps
-- Optional haptic and audioplayers feedback hooks with a no-op default
+- Optional haptic feedback and audioplayers-based sound feedback
+- Test-friendly clock, storage, and strategy abstractions
 
-## Use Cases
+## Supported platforms
 
-`focus_quest` is suitable for anti-doomscroll apps where staying away from the
-phone can grow a virtual forest, feed a pet, unlock collectibles, or record
-charity-impact metadata. It is also useful for Pomodoro apps, study timers,
-habit trackers, digital wellbeing products, and employee focus tools.
+The core Dart logic works anywhere Flutter runs. The included
+`SharedPreferencesFocusQuestStorage` and `HiveFocusQuestStorage` support the
+platforms covered by their underlying packages. App lifecycle behavior depends
+on Flutter lifecycle events from the host app.
 
-The package tracks app-level focus sessions. It does not block, inspect, or
-monitor other installed apps.
+Target platforms:
 
-## Supported Platforms
-
-The core Dart logic works anywhere Flutter runs. The bundled
-`SharedPreferencesFocusQuestStorage` depends on `shared_preferences`, which
-supports Android, iOS, web, macOS, Windows, and Linux. Lifecycle behavior is
-app-level and depends on Flutter lifecycle events from the host app.
+- Android
+- iOS
+- Web
+- macOS
+- Windows
+- Linux
 
 ## Installation
 
@@ -42,7 +59,13 @@ app-level and depends on Flutter lifecycle events from the host app.
 flutter pub add focus_quest
 ```
 
-## Quick Start
+Then import the package:
+
+```dart
+import 'package:focus_quest/focus_quest.dart';
+```
+
+## Quick start
 
 ```dart
 import 'package:focus_quest/focus_quest.dart';
@@ -53,6 +76,7 @@ Future<void> main() async {
   );
 
   await controller.initialize();
+
   await controller.start(
     duration: const Duration(minutes: 25),
     metadata: {
@@ -67,11 +91,15 @@ Future<void> main() async {
 
   final state = controller.state;
   print('Points: ${state.totalPoints}');
-  print('Streak: ${state.currentStreak}');
+  print('Current streak: ${state.currentStreak}');
 }
 ```
 
-## Riverpod Usage
+## Riverpod usage
+
+`focus_quest` includes a Riverpod notifier that coordinates the reusable
+controller. Domain logic stays in the controller instead of being embedded in
+UI widgets.
 
 ```dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -95,9 +123,11 @@ class FocusButton extends ConsumerWidget {
 }
 ```
 
-## Custom Reward Strategy
+## Custom rewards
 
-Use reward metadata to drive your own game world, pet, garden, or charity UI.
+Reward metadata can drive your own game layer. For example, one app might use
+it to grow trees, another might feed a virtual pet, and another might record
+charity-progress data that is later processed by its own backend.
 
 ```dart
 class GardenRewardStrategy implements RewardStrategy {
@@ -119,11 +149,14 @@ class GardenRewardStrategy implements RewardStrategy {
 }
 ```
 
-## Storage Customization
+## Storage
 
-Use `InMemoryFocusQuestStorage` in tests,
-`SharedPreferencesFocusQuestStorage` for lightweight local persistence, or
-`HiveFocusQuestStorage` for a Hive-backed store.
+Use the storage implementation that fits your app:
+
+- `InMemoryFocusQuestStorage` for tests and prototypes
+- `SharedPreferencesFocusQuestStorage` for lightweight local persistence
+- `HiveFocusQuestStorage` for Hive-backed local persistence
+- A custom `FocusQuestStorage` implementation for other databases or backends
 
 ```dart
 final controller = FocusQuestController(
@@ -131,17 +164,17 @@ final controller = FocusQuestController(
 );
 ```
 
-For a different database or backend, implement `FocusQuestStorage` and persist
-`FocusSession.toJson()` plus `FocusProfile.toJson()`.
+For a custom store, persist `FocusSession.toJson()` and `FocusProfile.toJson()`,
+then restore them with `FocusSession.fromJson()` and `FocusProfile.fromJson()`.
 
-## Lifecycle Behavior
+## Lifecycle behavior
 
 Call `handleLifecycleEvent` from your app lifecycle observer. The configured
 background behavior decides whether the active session pauses, cancels, or keeps
-running.
+running when the app moves away from the foreground.
 
 ```dart
-controller = FocusQuestController(
+final controller = FocusQuestController(
   config: const FocusQuestConfig(
     backgroundBehavior: BackgroundBehavior.pause,
     maxInterruptions: 3,
@@ -152,14 +185,16 @@ await controller.handleLifecycleEvent(FocusLifecycleEvent.paused);
 ```
 
 Elapsed and remaining time are calculated from timestamps, not only from
-one-second ticks. The controller prevents duplicate active timers and finalizes
-completed sessions once.
+one-second ticks. This keeps sessions accurate if the app is delayed, suspended,
+or restored later.
 
-## Optional Feedback and Audio
+## Feedback and sound
 
-The package includes `FocusFeedback`, `NoopFocusFeedback`,
-`FlutterFocusFeedback` for haptics, and `AudioplayersFocusFeedback` for
-optional asset-based sound effects.
+The package includes:
+
+- `NoopFocusFeedback` for silent behavior
+- `FlutterFocusFeedback` for haptics
+- `AudioplayersFocusFeedback` for optional asset-based sound effects
 
 ```dart
 final controller = FocusQuestController(
@@ -174,33 +209,42 @@ final controller = FocusQuestController(
 Sound assets are optional. Declare any assets you use in the host app's
 `pubspec.yaml`.
 
-## Example Application
+## Example application
 
-See `example/` for a small app that initializes the controller, starts focus
-sessions, handles lifecycle changes, displays progress, and persists state.
+See the `example/` directory for a small Flutter app that demonstrates:
 
-## Platform Limitations
+- Controller initialization
+- Starting, pausing, resuming, completing, and cancelling sessions
+- Remaining time and daily progress
+- Streak and history display
+- Lifecycle handling
+- Local persistence
+
+## Platform limitations
 
 - App-level lifecycle tracking is supported.
 - Device-wide app usage tracking is not included.
 - App blocking is not included.
-- Charity donations must be implemented by the app through its own backend or
-  payment/donation provider. `focus_quest` can store reward metadata for that
+- Charity donations must be implemented by the host app through its own backend
+  or payment/donation provider. `focus_quest` can store reward metadata for that
   flow, but it does not transfer money.
 
-## Testing
 
-```bash
-flutter test
-flutter test --coverage
-cd example && flutter test
-dart pub publish --dry-run
-```
+## Website
+
+For updates, support, and related package information, visit
+[csjotlab.com](https://csjotlab.com/).
+
+## Features and bugs
+
+Please file feature requests and bugs at the
+[issue tracker](https://github.com/Nayemuzzaman/focus_quest/issues).
 
 ## Roadmap
 
 - Richer streak policies and calendar rules
 - Share-card helpers for streaks, pets, gardens, and charity progress
+- More polished example screens for anti-doomscroll app concepts
 
 ## Contributing
 
