@@ -3,6 +3,7 @@ import 'package:focus_quest/src/feedback/focus_feedback.dart';
 
 /// Audio feedback implementation backed by the `audioplayers` package.
 class AudioplayersFocusFeedback implements FocusFeedback {
+  /// Creates asset-based audio feedback hooks.
   AudioplayersFocusFeedback({
     AudioPlayer? player,
     this.startedAsset,
@@ -17,12 +18,26 @@ class AudioplayersFocusFeedback implements FocusFeedback {
   }
 
   AudioPlayer? _player;
+
+  /// Asset path played when a session starts.
   final String? startedAsset;
+
+  /// Asset path played when a session pauses.
   final String? pausedAsset;
+
+  /// Asset path played when a session resumes.
   final String? resumedAsset;
+
+  /// Asset path played when a session completes.
   final String? completedAsset;
+
+  /// Asset path played when a session is cancelled.
   final String? cancelledAsset;
+
+  /// Asset path played when the profile levels up.
   final String? levelUpAsset;
+
+  /// Playback volume passed to the audio player.
   final double volume;
 
   @override

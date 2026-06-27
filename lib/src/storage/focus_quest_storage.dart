@@ -6,15 +6,30 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Provides a storage abstraction for persisting sessions and profile state.
 abstract class FocusQuestStorage {
+  /// Prepares the storage backend for reads and writes.
   Future<void> initialize();
+
+  /// Saves or replaces a session.
   Future<void> saveSession(FocusSession session);
+
+  /// Loads all stored sessions.
   Future<List<FocusSession>> loadSessions();
+
+  /// Saves the current profile.
   Future<void> saveProfile(FocusProfile profile);
+
+  /// Loads the current profile, if one exists.
   Future<FocusProfile?> loadProfile();
+
+  /// Removes all focus quest data from this storage backend.
   Future<void> clear();
 }
 
+/// Volatile storage implementation for tests and prototypes.
 class InMemoryFocusQuestStorage implements FocusQuestStorage {
+  /// Creates an empty in-memory storage instance.
+  InMemoryFocusQuestStorage();
+
   final List<FocusSession> _sessions = <FocusSession>[];
   FocusProfile? _profile;
 
@@ -50,9 +65,12 @@ class InMemoryFocusQuestStorage implements FocusQuestStorage {
   }
 }
 
+/// SharedPreferences-backed storage for lightweight local persistence.
 class SharedPreferencesFocusQuestStorage implements FocusQuestStorage {
+  /// Creates a SharedPreferences storage adapter.
   SharedPreferencesFocusQuestStorage({this.prefix = 'focus_quest'});
 
+  /// Key prefix used for stored focus quest values.
   final String prefix;
   SharedPreferences? _preferences;
 

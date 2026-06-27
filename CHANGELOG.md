@@ -7,3 +7,4 @@
 * Excluded generated build and coverage artifacts from publish archives.
 * Improved pub.dev metadata and documentation for anti-doomscroll, virtual pet, virtual garden, and charity-progress use cases.
 * Added first-party `HiveFocusQuestStorage` and `AudioplayersFocusFeedback` adapters.
+* Updated Riverpod integration for `flutter_riverpod` 3.x and expanded dartdoc comments across the public API.

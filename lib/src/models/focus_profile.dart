@@ -1,4 +1,6 @@
+/// Aggregated user progress across focus sessions.
 class FocusProfile {
+  /// Creates a profile snapshot.
   const FocusProfile({
     this.currentStreak = 0,
     this.longestStreak = 0,
@@ -12,17 +14,37 @@ class FocusProfile {
     this.currentLevel = 1,
   });
 
+  /// Number of qualifying focus days in the current streak.
   final int currentStreak;
+
+  /// Longest qualifying focus-day streak ever reached.
   final int longestStreak;
+
+  /// Total points earned by finalized sessions.
   final int totalPoints;
+
+  /// Total experience earned by finalized sessions.
   final int totalExperience;
+
+  /// Number of completed sessions.
   final int completedSessions;
+
+  /// Number of cancelled or failed sessions counted in the profile.
   final int cancelledSessions;
+
+  /// Total focused duration from finalized sessions.
   final Duration totalFocusedDuration;
+
+  /// Start of the most recent completed focus day.
   final DateTime? lastCompletedDate;
+
+  /// Timestamp of the most recent profile activity.
   final DateTime? lastActivityDate;
+
+  /// Current level derived from total experience.
   final int currentLevel;
 
+  /// Returns a copy with selected profile fields replaced.
   FocusProfile copyWith({
     int? currentStreak,
     int? longestStreak,
@@ -49,6 +71,7 @@ class FocusProfile {
     );
   }
 
+  /// Converts the profile into JSON-compatible values.
   Map<String, Object?> toJson() => {
     'currentStreak': currentStreak,
     'longestStreak': longestStreak,
@@ -62,6 +85,7 @@ class FocusProfile {
     'currentLevel': currentLevel,
   };
 
+  /// Restores a profile from JSON-compatible values.
   factory FocusProfile.fromJson(Map<String, Object?> json) {
     return FocusProfile(
       currentStreak: json['currentStreak'] as int? ?? 0,

@@ -17,6 +17,7 @@ import 'package:focus_quest/src/utilities/focus_clock.dart';
 
 /// The main public controller for managing focus sessions and statistics.
 class FocusQuestController extends ChangeNotifier {
+  /// Creates a controller with optional custom dependencies.
   FocusQuestController({
     FocusQuestConfig? config,
     FocusClock? clock,
@@ -29,11 +30,15 @@ class FocusQuestController extends ChangeNotifier {
        _storage = storage ?? InMemoryFocusQuestStorage(),
        _rewardStrategy = rewardStrategy ?? const DefaultRewardStrategy(),
        _feedback = feedback ?? const NoopFocusFeedback();
+
+  /// Configuration used by session, reward, lifecycle, and streak logic.
   final FocusQuestConfig config;
   final FocusClock _clock;
   final FocusQuestStorage _storage;
   final RewardStrategy _rewardStrategy;
   final FocusFeedback _feedback;
+
+  /// Optional lifecycle hook for host-app integrations.
   final FocusLifecycleHandler? lifecycleHandler;
 
   bool _isInitialized = false;
@@ -46,15 +51,29 @@ class FocusQuestController extends ChangeNotifier {
   Timer? _ticker;
   bool _isCompletingFromTick = false;
 
+  /// Current immutable state snapshot.
   FocusQuestState get state => _state;
+
+  /// Whether [initialize] has completed successfully.
   bool get isInitialized => _isInitialized;
+
+  /// Whether initialization or another async action is in progress.
   bool get isLoading => _isLoading;
+
+  /// Last controller error message, if any.
   String? get error => _error;
+
+  /// Current active session, if one is running or paused.
   FocusSession? get activeSession => _activeSession;
+
+  /// Copy of all persisted sessions.
   List<FocusSession> get sessionHistory =>
       List<FocusSession>.from(_sessionHistory);
+
+  /// Current profile snapshot.
   FocusProfile get profile => _profile;
 
+  /// Initializes storage and restores persisted sessions/profile state.
   Future<void> initialize() async {
     if (_isLoading) {
       return;
@@ -95,6 +114,7 @@ class FocusQuestController extends ChangeNotifier {
     }
   }
 
+  /// Starts a new focus session.
   Future<void> start({
     Duration? duration,
     Map<String, Object?>? metadata,
@@ -122,6 +142,7 @@ class FocusQuestController extends ChangeNotifier {
     _syncState();
   }
 
+  /// Pauses the active running session.
   Future<void> pause() async {
     _guardInitialized();
     final active = _ensureActiveSession();
@@ -141,6 +162,7 @@ class FocusQuestController extends ChangeNotifier {
     _syncState();
   }
 
+  /// Resumes the active paused session.
   Future<void> resume() async {
     _guardInitialized();
     final active = _ensureActiveSession();
@@ -160,6 +182,7 @@ class FocusQuestController extends ChangeNotifier {
     _syncState();
   }
 
+  /// Completes the active session and applies rewards.
   Future<void> complete() async {
     _guardInitialized();
     final active = _ensureActiveSession();
@@ -184,6 +207,7 @@ class FocusQuestController extends ChangeNotifier {
     _syncState();
   }
 
+  /// Cancels the active session with an optional [reason].
   Future<void> cancel({String? reason}) async {
     _guardInitialized();
     final active = _ensureActiveSession();
@@ -209,6 +233,7 @@ class FocusQuestController extends ChangeNotifier {
     _syncState();
   }
 
+  /// Resets active state and finalizes any active session without rewards.
   Future<void> reset() async {
     _guardInitialized();
     final active = _activeSession;
@@ -229,22 +254,26 @@ class FocusQuestController extends ChangeNotifier {
     _syncState();
   }
 
+  /// Recomputes statistics from the current in-memory state.
   Future<void> refreshStatistics() async {
     _guardInitialized();
     _syncState();
   }
 
+  /// Disposes timers and listener resources.
   @override
   void dispose() {
     _stopTicker();
     super.dispose();
   }
 
+  /// Clears the current error message.
   Future<void> clearError() async {
     _error = null;
     _syncState();
   }
 
+  /// Applies focus-session behavior for a host app lifecycle [event].
   Future<void> handleLifecycleEvent(FocusLifecycleEvent event) async {
     if (_activeSession == null || !_isActive(_activeSession!)) {
       await lifecycleHandler?.handleLifecycleEvent(event);

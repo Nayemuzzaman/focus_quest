@@ -1,9 +1,11 @@
 import 'package:focus_quest/src/models/focus_reward.dart';
 
+/// Lifecycle status for a focus session.
 enum FocusSessionStatus { idle, running, paused, completed, cancelled, failed }
 
 /// Represents one focus session and its current lifecycle state.
 class FocusSession {
+  /// Creates a focus session value.
   const FocusSession({
     required this.id,
     required this.startedAt,
@@ -19,24 +21,49 @@ class FocusSession {
     this.lastResumedAt,
   });
 
+  /// Unique session identifier.
   final String id;
+
+  /// Time when the session was started.
   final DateTime startedAt;
+
+  /// Time when the session reached a final state.
   final DateTime? completedAt;
+
+  /// Intended focused duration.
   final Duration targetDuration;
+
+  /// Actual accumulated focused duration.
   final Duration actualFocusDuration;
+
+  /// Current lifecycle status.
   final FocusSessionStatus status;
+
+  /// Number of times the session has been paused.
   final int pauseCount;
+
+  /// Number of lifecycle interruptions recorded for the session.
   final int interruptionCount;
+
+  /// Reward earned by the finalized session.
   final FocusReward? reward;
+
+  /// App-specific metadata attached to the session.
   final Map<String, Object?> metadata;
+
+  /// Reason for cancellation or failure.
   final String? failureReason;
+
+  /// Last timestamp when a running session resumed.
   final DateTime? lastResumedAt;
 
+  /// Remaining duration, clamped to zero.
   Duration get remainingDuration {
     final remaining = targetDuration.inSeconds - actualFocusDuration.inSeconds;
     return Duration(seconds: remaining > 0 ? remaining : 0);
   }
 
+  /// Returns a copy with selected fields replaced.
   FocusSession copyWith({
     String? id,
     DateTime? startedAt,
@@ -67,6 +94,7 @@ class FocusSession {
     );
   }
 
+  /// Advances focused duration to [now] using timestamps.
   FocusSession advanceTo(DateTime now) {
     if (status != FocusSessionStatus.running || lastResumedAt == null) {
       return this;
@@ -83,6 +111,7 @@ class FocusSession {
     );
   }
 
+  /// Converts the session into JSON-compatible values.
   Map<String, Object?> toJson() => {
     'id': id,
     'startedAt': startedAt.toIso8601String(),
@@ -98,6 +127,7 @@ class FocusSession {
     'lastResumedAt': lastResumedAt?.toIso8601String(),
   };
 
+  /// Restores a session from JSON-compatible values.
   factory FocusSession.fromJson(Map<String, Object?> json) {
     return FocusSession(
       id: json['id'] as String? ?? '',

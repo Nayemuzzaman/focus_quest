@@ -1,3 +1,9 @@
+/// Public API for the Focus Quest package.
+///
+/// Import this library to use focus sessions, rewards, statistics, storage,
+/// feedback, lifecycle handling, and Riverpod integration.
+library;
+
 export 'src/config/focus_quest_config.dart';
 export 'src/controller/focus_quest_controller.dart';
 export 'src/exceptions/focus_quest_exception.dart';

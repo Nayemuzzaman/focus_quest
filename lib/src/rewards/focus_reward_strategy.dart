@@ -4,11 +4,15 @@ import 'package:focus_quest/src/config/focus_quest_config.dart';
 import 'package:focus_quest/src/models/focus_reward.dart';
 import 'package:focus_quest/src/models/focus_session.dart';
 
+/// Calculates rewards for finalized focus sessions.
 abstract class RewardStrategy {
+  /// Returns the reward earned by [session] under [config].
   FocusReward calculate(FocusSession session, FocusQuestConfig config);
 }
 
+/// Default reward strategy based on focused minutes and completion bonuses.
 class DefaultRewardStrategy implements RewardStrategy {
+  /// Creates the default reward strategy.
   const DefaultRewardStrategy();
 
   @override

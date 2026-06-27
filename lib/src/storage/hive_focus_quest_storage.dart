@@ -5,6 +5,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 /// Hive-backed local persistence for focus sessions and profile state.
 class HiveFocusQuestStorage implements FocusQuestStorage {
+  /// Creates a Hive-backed storage adapter.
   HiveFocusQuestStorage({
     this.boxName = 'focus_quest',
     HiveInterface? hive,
@@ -14,6 +15,7 @@ class HiveFocusQuestStorage implements FocusQuestStorage {
   static const String _sessionsKey = 'sessions';
   static const String _profileKey = 'profile';
 
+  /// Name of the Hive box used by this adapter.
   final String boxName;
   final HiveInterface _hive;
 
