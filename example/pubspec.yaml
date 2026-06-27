@@ -1,0 +1,20 @@
+name: focus_quest_example
+description: Example application for the focus_quest package.
+publish_to: 'none'
+
+environment:
+  sdk: ^3.12.1
+  flutter: '>=3.22.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  focus_quest:
+    path: ..
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
