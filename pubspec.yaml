@@ -1,6 +1,6 @@
 name: focus_quest
 description: "A gamified focus and anti-doomscroll productivity engine for Flutter apps with sessions, rewards, streaks, persistence, and Riverpod integration."
-version: 0.0.2
+version: 0.0.1
 homepage: https://github.com/Nayemuzzaman/focus_quest
 repository: https://github.com/Nayemuzzaman/focus_quest
 issue_tracker: https://github.com/Nayemuzzaman/focus_quest/issues

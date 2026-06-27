@@ -1,4 +1,4 @@
-## 0.0.2
+## 0.0.1
 
 * Initial release of focus_quest with a reusable focus-session controller, configuration, storage abstractions, default reward strategy, Riverpod integration, lifecycle hooks, and a basic example app.
 * Added timestamp-driven controller ticker behavior for state refresh and automatic session completion.
