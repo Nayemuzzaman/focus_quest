@@ -1,8 +1,23 @@
 /// App lifecycle events understood by the focus controller.
-enum FocusLifecycleEvent { paused, resumed, inactive, detached }
+enum FocusLifecycleEvent {
+  /// The app moved to the background; applies the background behavior.
+  paused,
+
+  /// The app returned to the foreground; forwarded only.
+  resumed,
+
+  /// The app lost focus without leaving the foreground; forwarded only.
+  inactive,
+
+  /// The app is shutting down; applies the background behavior.
+  detached,
+}
 
 /// Receives lifecycle events from a host Flutter app.
 abstract class FocusLifecycleHandler {
+  /// Allows subclasses to declare const constructors.
+  const FocusLifecycleHandler();
+
   /// Handles a lifecycle [event].
   Future<void> handleLifecycleEvent(FocusLifecycleEvent event);
 }

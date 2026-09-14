@@ -8,6 +8,7 @@ class FocusStatistics {
     this.totalFocused = Duration.zero,
     this.completedSessions = 0,
     this.cancelledSessions = 0,
+    this.failedSessions = 0,
     this.completionRate = 0,
     this.currentStreak = 0,
     this.longestStreak = 0,
@@ -15,6 +16,8 @@ class FocusStatistics {
     this.totalExperience = 0,
     this.currentLevel = 1,
     this.progressToNextLevel = 0,
+    this.experienceToNextLevel = 0,
+    this.levelProgress = 0,
   });
 
   /// Focused duration completed today.
@@ -32,8 +35,13 @@ class FocusStatistics {
   /// Number of completed sessions.
   final int completedSessions;
 
-  /// Number of cancelled sessions.
+  /// Number of sessions that ended without completing (cancelled or failed).
   final int cancelledSessions;
+
+  /// Number of sessions that failed, for example from too many interruptions.
+  ///
+  /// Failed sessions are also included in [cancelledSessions].
+  final int failedSessions;
 
   /// Percentage of finalized sessions that were completed.
   final double completionRate;
@@ -53,6 +61,12 @@ class FocusStatistics {
   /// Current level derived from experience.
   final int currentLevel;
 
-  /// Experience progress within the current level band.
+  /// Experience earned within the current level band.
   final int progressToNextLevel;
+
+  /// Experience still required to reach the next level.
+  final int experienceToNextLevel;
+
+  /// Progress through the current level band from 0.0 to 1.0.
+  final double levelProgress;
 }

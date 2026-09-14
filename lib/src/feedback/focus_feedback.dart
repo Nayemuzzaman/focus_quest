@@ -2,6 +2,9 @@ import 'package:flutter/services.dart';
 
 /// Optional feedback hooks for session lifecycle events.
 abstract class FocusFeedback {
+  /// Allows subclasses to declare const constructors.
+  const FocusFeedback();
+
   /// Called after a session starts.
   Future<void> onSessionStarted();
 
@@ -17,7 +20,10 @@ abstract class FocusFeedback {
   /// Called after a session is cancelled.
   Future<void> onSessionCancelled();
 
-  /// Called after the user profile levels up.
+  /// Called after a finalized session raises the profile level.
+  ///
+  /// Invoked after the corresponding session callback, for example
+  /// [onSessionCompleted] followed by [onLevelUp].
   Future<void> onLevelUp();
 }
 

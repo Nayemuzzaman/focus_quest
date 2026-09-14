@@ -4,7 +4,7 @@ publish_to: 'none'
 
 environment:
   sdk: ^3.12.1
-  flutter: '>=3.22.0'
+  flutter: '>=3.44.1'
 
 dependencies:
   flutter:
@@ -15,6 +15,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  shared_preferences: ^2.3.3
 
 flutter:
   uses-material-design: true

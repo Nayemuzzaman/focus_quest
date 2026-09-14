@@ -30,10 +30,12 @@ monitor other installed apps.
 - Timestamp-based countdowns that stay accurate after delayed timer ticks
 - Configurable background behavior: pause, cancel, or keep running
 - Points, XP, completion bonuses, partial rewards, and custom reward metadata
+- Pluggable level curve with level-up feedback and progress values for XP bars
 - Daily goal progress, current streak, longest streak, completion rate, and history
 - In-memory, SharedPreferences-backed, and Hive-backed local persistence
 - Storage abstraction for custom Isar, SQLite, secure storage, or backend adapters
 - Riverpod notifier and immutable state for Flutter apps
+- Drop-in `WidgetsBindingObserver` that forwards app lifecycle changes
 - Optional haptic feedback and audioplayers-based sound feedback
 - Test-friendly clock, storage, and strategy abstractions
 
@@ -44,14 +46,17 @@ The core Dart logic works anywhere Flutter runs. The included
 platforms covered by their underlying packages. App lifecycle behavior depends
 on Flutter lifecycle events from the host app.
 
-Target platforms:
+Supported platforms:
 
 - Android
 - iOS
-- Web
 - macOS
 - Windows
 - Linux
+
+Web is not supported yet: the bundled `audioplayers` adapter depends on
+`path_provider`, which has no web implementation. Splitting the optional
+adapters into separate packages is planned so the core can run on the web.
 
 ## Installation
 
@@ -95,33 +100,66 @@ Future<void> main() async {
 }
 ```
 
+`initialize()` never throws: if storage fails it records the message in
+`state.error`, and `isInitialized` stays false until a later call succeeds.
+Session actions such as `start` and `pause` throw `FocusQuestException` when
+the controller is not initialized or the transition is invalid.
+
 ## Riverpod usage
 
 `focus_quest` includes a Riverpod notifier that coordinates the reusable
 controller. Domain logic stays in the controller instead of being embedded in
 UI widgets.
 
+Override `focusQuestControllerProvider` to choose storage, configuration,
+feedback, and strategies (the default controller keeps everything in memory),
+then watch `focusQuestInitializationProvider` so the controller is initialized
+before any action runs:
+
 ```dart
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:focus_quest/focus_quest.dart';
+
+void main() {
+  runApp(
+    ProviderScope(
+      overrides: [
+        focusQuestControllerProvider.overrideWith(
+          (ref) => FocusQuestController(
+            storage: SharedPreferencesFocusQuestStorage(),
+          ),
+        ),
+      ],
+      child: const MyApp(),
+    ),
+  );
+}
 
 class FocusButton extends ConsumerWidget {
   const FocusButton({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final initialization = ref.watch(focusQuestInitializationProvider);
     final state = ref.watch(focusQuestStateProvider);
     final notifier = ref.read(focusQuestStateProvider.notifier);
 
-    return ElevatedButton(
-      onPressed: state.status == FocusSessionStatus.running
-          ? null
-          : () => notifier.start(duration: const Duration(minutes: 25)),
-      child: Text(state.status.name),
+    return initialization.when(
+      loading: () => const CircularProgressIndicator(),
+      error: (error, _) => Text('$error'),
+      data: (_) => ElevatedButton(
+        onPressed: state.status == FocusSessionStatus.running
+            ? null
+            : () => notifier.start(duration: const Duration(minutes: 25)),
+        child: Text(state.status.name),
+      ),
     );
   }
 }
 ```
+
+The controller provided by `focusQuestControllerProvider` is disposed together
+with its `ProviderScope`.
 
 ## Custom rewards
 
@@ -149,6 +187,36 @@ class GardenRewardStrategy implements RewardStrategy {
 }
 ```
 
+## Levels
+
+Total experience maps to a level through a `LevelStrategy`. The default curve
+requires `levelBaseXp * (level - 1) ^ levelExponent` experience to reach a
+level (100, 230, 373, 528, ... with the default configuration). Statistics
+expose `currentLevel`, `progressToNextLevel`, `experienceToNextLevel`, and
+`levelProgress` (0.0 to 1.0) for XP bars, and `FocusFeedback.onLevelUp` runs
+whenever a finalized session raises the level.
+
+```dart
+class LinearLevelStrategy implements LevelStrategy {
+  const LinearLevelStrategy();
+
+  @override
+  int experienceForLevel(int level, FocusQuestConfig config) =>
+      (level - 1) * config.levelBaseXp;
+
+  @override
+  int levelForExperience(int experience, FocusQuestConfig config) =>
+      experience ~/ config.levelBaseXp + 1;
+}
+
+final controller = FocusQuestController(
+  levelStrategy: const LinearLevelStrategy(),
+);
+```
+
+Stored levels are recomputed from total experience during `initialize()`, so
+changing the strategy or upgrading the package keeps profiles consistent.
+
 ## Storage
 
 Use the storage implementation that fits your app:
@@ -169,9 +237,10 @@ then restore them with `FocusSession.fromJson()` and `FocusProfile.fromJson()`.
 
 ## Lifecycle behavior
 
-Call `handleLifecycleEvent` from your app lifecycle observer. The configured
-background behavior decides whether the active session pauses, cancels, or keeps
-running when the app moves away from the foreground.
+Attach a `FocusQuestLifecycleObserver`, or call `handleLifecycleEvent` from
+your own `WidgetsBindingObserver`. The configured background behavior decides
+whether the active session pauses, cancels, or keeps running when the app
+moves away from the foreground.
 
 ```dart
 final controller = FocusQuestController(
@@ -181,12 +250,28 @@ final controller = FocusQuestController(
   ),
 );
 
+// In a State: attach in initState, detach in dispose.
+final observer = FocusQuestLifecycleObserver(controller)..attach();
+
+// Or forward events yourself:
 await controller.handleLifecycleEvent(FocusLifecycleEvent.paused);
 ```
 
+Semantics:
+
+- `paused` and `detached` count one interruption and apply the background
+  behavior, but only while the session is running. Events for a session that
+  is already paused are ignored, so platforms that emit `inactive`, `hidden`,
+  and `paused` back to back never double count.
+- `inactive` and `resumed` never change the session; they are only forwarded
+  to the optional `lifecycleHandler`.
+- When the interruption count exceeds `maxInterruptions` the session fails.
+- Events are processed in order even when they arrive concurrently.
+
 Elapsed and remaining time are calculated from timestamps, not only from
 one-second ticks. This keeps sessions accurate if the app is delayed, suspended,
-or restored later.
+or restored later. A running session restored after a restart completes at the
+moment its target was reached and never earns more than its target duration.
 
 ## Feedback and sound
 
@@ -209,6 +294,10 @@ final controller = FocusQuestController(
 Sound assets are optional. Declare any assets you use in the host app's
 `pubspec.yaml`.
 
+Feedback hooks run after the new state has been published and are isolated
+from session logic: an exception thrown by a hook is reported through
+`FlutterError.reportError` and never changes the session.
+
 ## Example application
 
 See the `example/` directory for a small Flutter app that demonstrates:
@@ -223,6 +312,10 @@ See the `example/` directory for a small Flutter app that demonstrates:
 ## Platform limitations
 
 - App-level lifecycle tracking is supported.
+- If the OS kills the app while a session is running, no lifecycle event is
+  delivered. The session is restored on the next launch and completes at the
+  moment its target was reached; the `pause` and `cancel` background behaviors
+  cannot be applied retroactively yet.
 - Device-wide app usage tracking is not included.
 - App blocking is not included.
 - Charity donations must be implemented by the host app through its own backend
@@ -242,9 +335,12 @@ Please file feature requests and bugs at the
 
 ## Roadmap
 
+- Optional adapter packages so the core no longer depends on `audioplayers`,
+  Hive, or Riverpod (and can run on the web)
+- Event stream for completed sessions, level-ups, streaks, and daily goals
+- Pomodoro breaks and cycles, auto-resume on foreground, history retention
 - Richer streak policies and calendar rules
 - Share-card helpers for streaks, pets, gardens, and charity progress
-- More polished example screens for anti-doomscroll app concepts
 
 ## Contributing
 

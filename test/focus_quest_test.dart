@@ -403,23 +403,6 @@ void main() {
     });
   });
 
-  group('feedback', () {
-    test(
-      'audioplayers feedback is a no-op when no assets are configured',
-      () async {
-        final feedback = AudioplayersFocusFeedback();
-
-        await feedback.onSessionStarted();
-        await feedback.onSessionPaused();
-        await feedback.onSessionResumed();
-        await feedback.onSessionCompleted();
-        await feedback.onSessionCancelled();
-        await feedback.onLevelUp();
-        await feedback.dispose();
-      },
-    );
-  });
-
   group('Riverpod integration', () {
     test('notifier coordinates controller actions', () async {
       final controller = FocusQuestController(

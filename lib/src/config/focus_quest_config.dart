@@ -1,3 +1,5 @@
+import 'package:focus_quest/src/rewards/focus_level_strategy.dart';
+
 /// Controls how a session behaves when the app moves to the background.
 enum BackgroundBehavior { pause, cancel, keepRunning }
 
@@ -16,7 +18,22 @@ class FocusQuestConfig {
     this.levelExponent = 1.2,
     this.streakMinimumDailyTargetMinutes = 25,
     this.partialRewardMultiplier = 0.5,
-  });
+  }) : assert(
+         pointsPerFocusedMinute >= 0,
+         'pointsPerFocusedMinute must not be negative.',
+       ),
+       assert(completionBonus >= 0, 'completionBonus must not be negative.'),
+       assert(maxInterruptions >= 0, 'maxInterruptions must not be negative.'),
+       assert(levelBaseXp > 0, 'levelBaseXp must be positive.'),
+       assert(levelExponent > 0, 'levelExponent must be positive.'),
+       assert(
+         streakMinimumDailyTargetMinutes >= 0,
+         'streakMinimumDailyTargetMinutes must not be negative.',
+       ),
+       assert(
+         partialRewardMultiplier >= 0,
+         'partialRewardMultiplier must not be negative.',
+       );
 
   /// Duration used when [FocusQuestController.start] receives no duration.
   final Duration defaultSessionDuration;
@@ -39,10 +56,12 @@ class FocusQuestConfig {
   /// Whether cancelled sessions can earn partial rewards.
   final bool partialRewardEnabled;
 
-  /// Base XP value used by the default level calculation.
+  /// Base experience used by [DefaultLevelStrategy]: reaching level `n`
+  /// requires `levelBaseXp * (n - 1) ^ levelExponent` total experience.
   final int levelBaseXp;
 
-  /// Exponent used by the default level calculation.
+  /// Exponent used by [DefaultLevelStrategy]; values above 1 make each level
+  /// progressively harder to reach.
   final double levelExponent;
 
   /// Minimum focused minutes needed for a day to count toward streaks.

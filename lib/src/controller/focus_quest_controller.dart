@@ -11,6 +11,7 @@ import 'package:focus_quest/src/models/focus_reward.dart';
 import 'package:focus_quest/src/models/focus_session.dart';
 import 'package:focus_quest/src/models/focus_statistics.dart';
 import 'package:focus_quest/src/models/focus_state.dart';
+import 'package:focus_quest/src/rewards/focus_level_strategy.dart';
 import 'package:focus_quest/src/rewards/focus_reward_strategy.dart';
 import 'package:focus_quest/src/storage/focus_quest_storage.dart';
 import 'package:focus_quest/src/utilities/focus_clock.dart';
@@ -23,12 +24,14 @@ class FocusQuestController extends ChangeNotifier {
     FocusClock? clock,
     FocusQuestStorage? storage,
     RewardStrategy? rewardStrategy,
+    LevelStrategy? levelStrategy,
     FocusFeedback? feedback,
     this.lifecycleHandler,
   }) : config = config ?? const FocusQuestConfig(),
        _clock = clock ?? const SystemFocusClock(),
        _storage = storage ?? InMemoryFocusQuestStorage(),
        _rewardStrategy = rewardStrategy ?? const DefaultRewardStrategy(),
+       _levelStrategy = levelStrategy ?? const DefaultLevelStrategy(),
        _feedback = feedback ?? const NoopFocusFeedback();
 
   /// Configuration used by session, reward, lifecycle, and streak logic.
@@ -36,6 +39,7 @@ class FocusQuestController extends ChangeNotifier {
   final FocusClock _clock;
   final FocusQuestStorage _storage;
   final RewardStrategy _rewardStrategy;
+  final LevelStrategy _levelStrategy;
   final FocusFeedback _feedback;
 
   /// Optional lifecycle hook for host-app integrations.
@@ -50,6 +54,10 @@ class FocusQuestController extends ChangeNotifier {
   FocusQuestState _state = const FocusQuestState();
   Timer? _ticker;
   bool _isCompletingFromTick = false;
+  Future<void> _lifecycleQueue = Future<void>.value();
+  _HistoryAggregates? _aggregates;
+  List<FocusSession>? _aggregatesSource;
+  DateTime? _aggregatesDay;
 
   /// Current immutable state snapshot.
   FocusQuestState get state => _state;
@@ -88,15 +96,18 @@ class FocusQuestController extends ChangeNotifier {
       final sessions = await _storage.loadSessions();
       final profile = await _storage.loadProfile();
       _sessionHistory = sessions;
-      _profile = profile ?? const FocusProfile();
+      _profile = await _reconcileProfileLevel(profile ?? const FocusProfile());
       _activeSession = sessions
           .where((session) => _isActive(session))
           .toList()
           .lastOrNull;
+      var completedWhileAway = false;
+      var leveledUp = false;
       if (_activeSession != null) {
         final advanced = _advanceSession(_activeSession!, _clock.now());
         if (advanced.status == FocusSessionStatus.completed) {
-          await _finalizeSession(advanced, completed: true);
+          completedWhileAway = true;
+          leveledUp = await _finalizeSession(advanced, completed: true);
         } else {
           _activeSession = advanced;
           await _persistSession(advanced);
@@ -105,6 +116,12 @@ class FocusQuestController extends ChangeNotifier {
       }
       _isInitialized = true;
       _syncState();
+      if (completedWhileAway) {
+        await _notifyFeedback(_feedback.onSessionCompleted);
+        if (leveledUp) {
+          await _notifyFeedback(_feedback.onLevelUp);
+        }
+      }
     } catch (error) {
       _error = error.toString();
       _syncState();
@@ -126,20 +143,26 @@ class FocusQuestController extends ChangeNotifier {
       );
     }
 
+    final targetDuration = duration ?? config.defaultSessionDuration;
+    if (targetDuration <= Duration.zero) {
+      throw const FocusQuestException('Session duration must be positive.');
+    }
+
     final now = _clock.now();
-    _activeSession = FocusSession(
+    final session = FocusSession(
       id: _generateId(),
       startedAt: now,
-      targetDuration: duration ?? config.defaultSessionDuration,
+      targetDuration: targetDuration,
       status: FocusSessionStatus.running,
       metadata: metadata ?? const {},
       lastResumedAt: now,
     );
 
-    await _persistSession(_activeSession!);
-    await _feedback.onSessionStarted();
+    await _persistSession(session);
+    _activeSession = session;
     _startTickerIfNeeded();
     _syncState();
+    await _notifyFeedback(_feedback.onSessionStarted);
   }
 
   /// Pauses the active running session.
@@ -157,9 +180,9 @@ class FocusQuestController extends ChangeNotifier {
     );
     _activeSession = updated;
     await _persistSession(updated);
-    await _feedback.onSessionPaused();
     _stopTicker();
     _syncState();
+    await _notifyFeedback(_feedback.onSessionPaused);
   }
 
   /// Resumes the active paused session.
@@ -177,9 +200,9 @@ class FocusQuestController extends ChangeNotifier {
     );
     _activeSession = updated;
     await _persistSession(updated);
-    await _feedback.onSessionResumed();
     _startTickerIfNeeded();
     _syncState();
+    await _notifyFeedback(_feedback.onSessionResumed);
   }
 
   /// Completes the active session and applies rewards.
@@ -189,22 +212,25 @@ class FocusQuestController extends ChangeNotifier {
     if (active.status == FocusSessionStatus.completed ||
         active.status == FocusSessionStatus.cancelled ||
         active.status == FocusSessionStatus.failed) {
-      throw StateError('The session is already completed.');
+      throw const FocusQuestException('The session is already completed.');
     }
 
     final now = _clock.now();
     final advanced = _advanceSession(active, now);
     final completed = advanced.copyWith(
       status: FocusSessionStatus.completed,
-      completedAt: now,
+      completedAt: advanced.completedAt ?? now,
     );
     final updated = completed.copyWith(
       reward: _rewardStrategy.calculate(completed, config),
     );
-    await _finalizeSession(updated, completed: true);
-    await _feedback.onSessionCompleted();
+    final leveledUp = await _finalizeSession(updated, completed: true);
     _stopTicker();
     _syncState();
+    await _notifyFeedback(_feedback.onSessionCompleted);
+    if (leveledUp) {
+      await _notifyFeedback(_feedback.onLevelUp);
+    }
   }
 
   /// Cancels the active session with an optional [reason].
@@ -227,10 +253,13 @@ class FocusQuestController extends ChangeNotifier {
     final updated = cancelled.copyWith(
       reward: _rewardStrategy.calculate(cancelled, config),
     );
-    await _finalizeSession(updated, completed: false);
-    await _feedback.onSessionCancelled();
+    final leveledUp = await _finalizeSession(updated, completed: false);
     _stopTicker();
     _syncState();
+    await _notifyFeedback(_feedback.onSessionCancelled);
+    if (leveledUp) {
+      await _notifyFeedback(_feedback.onLevelUp);
+    }
   }
 
   /// Resets active state and finalizes any active session without rewards.
@@ -274,29 +303,45 @@ class FocusQuestController extends ChangeNotifier {
   }
 
   /// Applies focus-session behavior for a host app lifecycle [event].
-  Future<void> handleLifecycleEvent(FocusLifecycleEvent event) async {
-    if (_activeSession == null || !_isActive(_activeSession!)) {
-      await lifecycleHandler?.handleLifecycleEvent(event);
-      return;
-    }
+  ///
+  /// Only [FocusLifecycleEvent.paused] and [FocusLifecycleEvent.detached]
+  /// affect the session, and only while it is running: each records one
+  /// interruption and then applies [FocusQuestConfig.backgroundBehavior].
+  /// Repeated events for an already paused session are ignored, so host apps
+  /// may forward every platform lifecycle transition without double counting.
+  /// [FocusLifecycleEvent.inactive] and [FocusLifecycleEvent.resumed] never
+  /// change the session. Every event is forwarded to [lifecycleHandler].
+  Future<void> handleLifecycleEvent(FocusLifecycleEvent event) {
+    // Platforms emit several transitions back to back (inactive, hidden,
+    // paused). Serialize them so each one observes the previous outcome.
+    final next = _lifecycleQueue.then((_) => _applyLifecycleEvent(event));
+    _lifecycleQueue = next.catchError((Object _) {});
+    return next;
+  }
 
-    if (event == FocusLifecycleEvent.paused) {
-      final interrupted = _activeSession!.copyWith(
-        interruptionCount: _activeSession!.interruptionCount + 1,
+  Future<void> _applyLifecycleEvent(FocusLifecycleEvent event) async {
+    final active = _activeSession;
+    final isBackgrounding =
+        event == FocusLifecycleEvent.paused ||
+        event == FocusLifecycleEvent.detached;
+
+    if (isBackgrounding &&
+        active != null &&
+        active.status == FocusSessionStatus.running) {
+      final interrupted = active.copyWith(
+        interruptionCount: active.interruptionCount + 1,
       );
       _activeSession = interrupted;
       await _persistSession(interrupted);
 
       if (interrupted.interruptionCount > config.maxInterruptions) {
         await _fail(reason: 'Maximum interruptions exceeded.');
-        await lifecycleHandler?.handleLifecycleEvent(event);
-        return;
-      }
-
-      if (config.backgroundBehavior == BackgroundBehavior.pause) {
+      } else if (config.backgroundBehavior == BackgroundBehavior.pause) {
         await pause();
       } else if (config.backgroundBehavior == BackgroundBehavior.cancel) {
         await cancel(reason: 'App moved to background.');
+      } else {
+        _syncState();
       }
     }
 
@@ -344,19 +389,36 @@ class FocusQuestController extends ChangeNotifier {
     }
 
     final advanced = session.advanceTo(now);
-    if (advanced.actualFocusDuration >= advanced.targetDuration) {
-      final completed = advanced.copyWith(
-        status: FocusSessionStatus.completed,
-        completedAt: now,
-      );
-      return completed.copyWith(
-        reward: _rewardStrategy.calculate(completed, config),
-      );
+    if (advanced.actualFocusDuration < advanced.targetDuration) {
+      return advanced;
     }
-    return advanced;
+
+    // The target may have been reached long before this call (for example
+    // when restoring after the app was killed), so finalize at the moment it
+    // was actually reached and never credit more than the target.
+    final resumedAt = session.lastResumedAt;
+    final remainingBefore =
+        session.targetDuration - session.actualFocusDuration;
+    var reachedAt = resumedAt == null || remainingBefore <= Duration.zero
+        ? (resumedAt ?? now)
+        : resumedAt.add(remainingBefore);
+    if (reachedAt.isAfter(now)) {
+      reachedAt = now;
+    }
+    final completed = advanced.copyWith(
+      actualFocusDuration: advanced.targetDuration,
+      status: FocusSessionStatus.completed,
+      completedAt: reachedAt,
+      lastResumedAt: reachedAt,
+    );
+    return completed.copyWith(
+      reward: _rewardStrategy.calculate(completed, config),
+    );
   }
 
-  Future<void> _finalizeSession(
+  /// Persists a finalized [session], updates the profile, and returns whether
+  /// the profile level increased.
+  Future<bool> _finalizeSession(
     FocusSession session, {
     required bool completed,
   }) async {
@@ -365,7 +427,7 @@ class FocusQuestController extends ChangeNotifier {
         _sessionHistory.where((item) => item.id != session.id).toList()
           ..add(session);
     await _persistSession(session);
-    await _updateProfileForSession(session, completed: completed);
+    return _updateProfileForSession(session, completed: completed);
   }
 
   Future<void> _persistSession(FocusSession session) async {
@@ -373,13 +435,15 @@ class FocusQuestController extends ChangeNotifier {
     _sessionHistory = await _storage.loadSessions();
   }
 
-  Future<void> _updateProfileForSession(
+  Future<bool> _updateProfileForSession(
     FocusSession session, {
     required bool completed,
   }) async {
-    final streak = _calculateStreak(_sessionHistory);
+    final aggregates = _historyAggregates();
     final totalExperience =
         _profile.totalExperience + (session.reward?.experience ?? 0);
+    final newLevel = _levelStrategy.levelForExperience(totalExperience, config);
+    final leveledUp = newLevel > _profile.currentLevel;
     final updatedProfile = _profile.copyWith(
       totalPoints: _profile.totalPoints + (session.reward?.points ?? 0),
       totalExperience: totalExperience,
@@ -388,38 +452,43 @@ class FocusQuestController extends ChangeNotifier {
       totalFocusedDuration:
           _profile.totalFocusedDuration + session.actualFocusDuration,
       lastCompletedDate: completed
-          ? _startOfDay(_clock.now())
+          ? _startOfDay(session.completedAt ?? _clock.now())
           : _profile.lastCompletedDate,
       lastActivityDate: _clock.now(),
-      currentLevel: _currentLevelForExperience(totalExperience),
-      currentStreak: streak.current,
-      longestStreak: streak.longest,
+      currentLevel: newLevel,
+      currentStreak: aggregates.currentStreak,
+      longestStreak: aggregates.longestStreak,
     );
 
     _profile = updatedProfile;
     await _storage.saveProfile(updatedProfile);
+    return leveledUp;
   }
 
-  ({int current, int longest}) _calculateStreak(List<FocusSession> sessions) {
-    final qualifyingDays = <DateTime>{};
-    final focusedByDay = <DateTime, Duration>{};
+  /// Recomputes the stored level from total experience so profiles written by
+  /// an older level formula (or a different strategy) stay consistent.
+  Future<FocusProfile> _reconcileProfileLevel(FocusProfile profile) async {
+    final level = _levelStrategy.levelForExperience(
+      profile.totalExperience,
+      config,
+    );
+    if (level == profile.currentLevel) {
+      return profile;
+    }
+    final reconciled = profile.copyWith(currentLevel: level);
+    await _storage.saveProfile(reconciled);
+    return reconciled;
+  }
+
+  ({int current, int longest}) _calculateStreak(
+    Map<DateTime, Duration> focusedByDay,
+    DateTime today,
+  ) {
     final minimum = Duration(minutes: config.streakMinimumDailyTargetMinutes);
-
-    for (final session in sessions) {
-      if (session.status != FocusSessionStatus.completed ||
-          session.completedAt == null) {
-        continue;
-      }
-      final day = _startOfDay(session.completedAt!);
-      focusedByDay[day] =
-          (focusedByDay[day] ?? Duration.zero) + session.actualFocusDuration;
-    }
-
-    for (final entry in focusedByDay.entries) {
-      if (entry.value >= minimum) {
-        qualifyingDays.add(entry.key);
-      }
-    }
+    final qualifyingDays = <DateTime>{
+      for (final entry in focusedByDay.entries)
+        if (entry.value >= minimum) entry.key,
+    };
 
     if (qualifyingDays.isEmpty) {
       return (current: 0, longest: 0);
@@ -429,7 +498,7 @@ class FocusQuestController extends ChangeNotifier {
     var longest = 1;
     var run = 1;
     for (var index = 1; index < sortedDays.length; index += 1) {
-      if (sortedDays[index].difference(sortedDays[index - 1]).inDays == 1) {
+      if (_previousDay(sortedDays[index]) == sortedDays[index - 1]) {
         run += 1;
       } else {
         run = 1;
@@ -437,26 +506,14 @@ class FocusQuestController extends ChangeNotifier {
       longest = max(longest, run);
     }
 
-    final today = _startOfDay(_clock.now());
-    final yesterday = today.subtract(const Duration(days: 1));
     var current = 0;
-    var cursor = qualifyingDays.contains(today) ? today : yesterday;
+    var cursor = qualifyingDays.contains(today) ? today : _previousDay(today);
     while (qualifyingDays.contains(cursor)) {
       current += 1;
-      cursor = cursor.subtract(const Duration(days: 1));
+      cursor = _previousDay(cursor);
     }
 
     return (current: current, longest: longest);
-  }
-
-  int _currentLevelForExperience(int experience) {
-    if (experience <= 0) {
-      return 1;
-    }
-    final level =
-        (log(experience / config.levelBaseXp) / log(config.levelExponent))
-            .floor();
-    return max(1, level + 1);
   }
 
   String _generateId() {
@@ -491,101 +548,117 @@ class FocusQuestController extends ChangeNotifier {
   }
 
   FocusStatistics _buildStatistics() {
-    final now = _clock.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final weekStart = today.subtract(Duration(days: today.weekday - 1));
-    final monthStart = DateTime(now.year, now.month, 1);
-
-    final focusedToday = _sessionHistory
-        .where(
-          (session) =>
-              session.status == FocusSessionStatus.completed &&
-              session.completedAt != null,
-        )
-        .fold<Duration>(Duration.zero, (duration, session) {
-          final completedDay = DateTime(
-            session.completedAt!.year,
-            session.completedAt!.month,
-            session.completedAt!.day,
-          );
-          if (completedDay == today) {
-            return duration + session.actualFocusDuration;
-          }
-          return duration;
-        });
-
-    final focusedThisWeek = _sessionHistory
-        .where(
-          (session) =>
-              session.status == FocusSessionStatus.completed &&
-              session.completedAt != null,
-        )
-        .fold<Duration>(Duration.zero, (duration, session) {
-          final completedDay = DateTime(
-            session.completedAt!.year,
-            session.completedAt!.month,
-            session.completedAt!.day,
-          );
-          if (completedDay.isAfter(
-                weekStart.subtract(const Duration(days: 1)),
-              ) &&
-              !completedDay.isAfter(today)) {
-            return duration + session.actualFocusDuration;
-          }
-          return duration;
-        });
-
-    final focusedThisMonth = _sessionHistory
-        .where(
-          (session) =>
-              session.status == FocusSessionStatus.completed &&
-              session.completedAt != null,
-        )
-        .fold<Duration>(Duration.zero, (duration, session) {
-          final completedDay = DateTime(
-            session.completedAt!.year,
-            session.completedAt!.month,
-            session.completedAt!.day,
-          );
-          if (completedDay.isAfter(
-                monthStart.subtract(const Duration(days: 1)),
-              ) &&
-              !completedDay.isAfter(today)) {
-            return duration + session.actualFocusDuration;
-          }
-          return duration;
-        });
-
-    final completedSessions = _sessionHistory
-        .where((session) => session.status == FocusSessionStatus.completed)
-        .length;
-    final cancelledSessions = _sessionHistory
-        .where((session) => session.status == FocusSessionStatus.cancelled)
-        .length;
-    final completionRate = completedSessions + cancelledSessions == 0
-        ? 0.0
-        : (completedSessions / (completedSessions + cancelledSessions) * 100)
-              .toDouble();
-    final totalPoints = _profile.totalPoints;
+    final aggregates = _historyAggregates();
     final totalExperience = _profile.totalExperience;
+    final finalizedSessions =
+        aggregates.completedSessions + aggregates.cancelledSessions;
+    final completionRate = finalizedSessions == 0
+        ? 0.0
+        : aggregates.completedSessions / finalizedSessions * 100;
     final currentLevel = _profile.currentLevel;
-    final progressToNextLevel = (totalExperience % config.levelBaseXp).toInt();
+    final levelStart = _levelStrategy.experienceForLevel(currentLevel, config);
+    final nextLevelStart = _levelStrategy.experienceForLevel(
+      currentLevel + 1,
+      config,
+    );
+    final band = nextLevelStart - levelStart;
+    final progressToNextLevel = max(0, totalExperience - levelStart);
+    final experienceToNextLevel = max(0, nextLevelStart - totalExperience);
+    final levelProgress = band <= 0
+        ? 1.0
+        : min(1.0, progressToNextLevel / band);
 
     return FocusStatistics(
-      focusedToday: focusedToday,
-      focusedThisWeek: focusedThisWeek,
-      focusedThisMonth: focusedThisMonth,
+      focusedToday: aggregates.focusedToday,
+      focusedThisWeek: aggregates.focusedThisWeek,
+      focusedThisMonth: aggregates.focusedThisMonth,
       totalFocused: _profile.totalFocusedDuration,
-      completedSessions: completedSessions,
-      cancelledSessions: cancelledSessions,
+      completedSessions: aggregates.completedSessions,
+      cancelledSessions: aggregates.cancelledSessions,
+      failedSessions: aggregates.failedSessions,
       completionRate: completionRate,
-      currentStreak: _profile.currentStreak,
-      longestStreak: _profile.longestStreak,
-      totalPoints: totalPoints,
+      currentStreak: aggregates.currentStreak,
+      longestStreak: aggregates.longestStreak,
+      totalPoints: _profile.totalPoints,
       totalExperience: totalExperience,
       currentLevel: currentLevel,
       progressToNextLevel: progressToNextLevel,
+      experienceToNextLevel: experienceToNextLevel,
+      levelProgress: levelProgress,
     );
+  }
+
+  /// Returns history-derived aggregates, recomputing them only when the
+  /// history list or the calendar day has changed since the last call.
+  _HistoryAggregates _historyAggregates() {
+    final today = _dayKey(_clock.now());
+    final cached = _aggregates;
+    if (cached != null &&
+        identical(_aggregatesSource, _sessionHistory) &&
+        _aggregatesDay == today) {
+      return cached;
+    }
+
+    final weekStart = today.subtract(Duration(days: today.weekday - 1));
+    final monthStart = DateTime.utc(today.year, today.month);
+    final focusedByDay = <DateTime, Duration>{};
+    var focusedToday = Duration.zero;
+    var focusedThisWeek = Duration.zero;
+    var focusedThisMonth = Duration.zero;
+    var completedSessions = 0;
+    var cancelledSessions = 0;
+    var failedSessions = 0;
+
+    for (final session in _sessionHistory) {
+      switch (session.status) {
+        case FocusSessionStatus.cancelled:
+          cancelledSessions += 1;
+        case FocusSessionStatus.failed:
+          cancelledSessions += 1;
+          failedSessions += 1;
+        case FocusSessionStatus.completed:
+          completedSessions += 1;
+          final completedAt = session.completedAt;
+          if (completedAt == null) {
+            continue;
+          }
+          final day = _dayKey(completedAt);
+          final focused = session.actualFocusDuration;
+          focusedByDay[day] = (focusedByDay[day] ?? Duration.zero) + focused;
+          if (day.isAfter(today)) {
+            continue;
+          }
+          if (day == today) {
+            focusedToday += focused;
+          }
+          if (!day.isBefore(weekStart)) {
+            focusedThisWeek += focused;
+          }
+          if (!day.isBefore(monthStart)) {
+            focusedThisMonth += focused;
+          }
+        case FocusSessionStatus.idle:
+        case FocusSessionStatus.running:
+        case FocusSessionStatus.paused:
+          break;
+      }
+    }
+
+    final streak = _calculateStreak(focusedByDay, today);
+    final aggregates = _HistoryAggregates(
+      focusedToday: focusedToday,
+      focusedThisWeek: focusedThisWeek,
+      focusedThisMonth: focusedThisMonth,
+      completedSessions: completedSessions,
+      cancelledSessions: cancelledSessions,
+      failedSessions: failedSessions,
+      currentStreak: streak.current,
+      longestStreak: streak.longest,
+    );
+    _aggregates = aggregates;
+    _aggregatesSource = _sessionHistory;
+    _aggregatesDay = today;
+    return aggregates;
   }
 
   double _dailyGoalProgress(Duration focusedToday) {
@@ -598,6 +671,16 @@ class FocusQuestController extends ChangeNotifier {
 
   DateTime _startOfDay(DateTime value) {
     return DateTime(value.year, value.month, value.day);
+  }
+
+  /// Local calendar day of [value] as a UTC date, so day arithmetic is exact
+  /// across daylight-saving transitions.
+  DateTime _dayKey(DateTime value) {
+    return DateTime.utc(value.year, value.month, value.day);
+  }
+
+  DateTime _previousDay(DateTime dayKey) {
+    return dayKey.subtract(const Duration(days: 1));
   }
 
   void _startTickerIfNeeded() {
@@ -622,19 +705,63 @@ class FocusQuestController extends ChangeNotifier {
     }
 
     final advanced = _advanceSession(_activeSession!, _clock.now());
-    _activeSession = advanced;
-    if (advanced.status == FocusSessionStatus.completed) {
+    if (advanced.status != FocusSessionStatus.completed) {
+      _activeSession = advanced;
+    } else {
       _isCompletingFromTick = true;
       try {
-        await _finalizeSession(advanced, completed: true);
-        await _feedback.onSessionCompleted();
+        final leveledUp = await _finalizeSession(advanced, completed: true);
         _stopTicker();
+        _syncState();
+        await _notifyFeedback(_feedback.onSessionCompleted);
+        if (leveledUp) {
+          await _notifyFeedback(_feedback.onLevelUp);
+        }
       } finally {
         _isCompletingFromTick = false;
       }
+      return;
     }
     _syncState();
   }
+
+  /// Runs a feedback [hook] without letting its failure affect session state.
+  Future<void> _notifyFeedback(Future<void> Function() hook) async {
+    try {
+      await hook();
+    } catch (error, stackTrace) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'focus_quest',
+          context: ErrorDescription('while running a FocusFeedback hook'),
+        ),
+      );
+    }
+  }
+}
+
+class _HistoryAggregates {
+  const _HistoryAggregates({
+    required this.focusedToday,
+    required this.focusedThisWeek,
+    required this.focusedThisMonth,
+    required this.completedSessions,
+    required this.cancelledSessions,
+    required this.failedSessions,
+    required this.currentStreak,
+    required this.longestStreak,
+  });
+
+  final Duration focusedToday;
+  final Duration focusedThisWeek;
+  final Duration focusedThisMonth;
+  final int completedSessions;
+  final int cancelledSessions;
+  final int failedSessions;
+  final int currentStreak;
+  final int longestStreak;
 }
 
 extension _LastOrNull<T> on Iterable<T> {
