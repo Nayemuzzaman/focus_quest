@@ -1,11 +1,50 @@
 import 'package:focus_quest/src/controller/focus_quest_controller.dart';
+import 'package:focus_quest/src/exceptions/focus_quest_exception.dart';
 import 'package:focus_quest/src/models/focus_state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// Provides the default [FocusQuestController] used by Riverpod integrations.
+/// Provides the [FocusQuestController] used by Riverpod integrations.
+///
+/// The default controller uses in-memory storage. Override this provider to
+/// supply persistent storage, configuration, feedback, or strategies:
+///
+/// ```dart
+/// ProviderScope(
+///   overrides: [
+///     focusQuestControllerProvider.overrideWith(
+///       (ref) => FocusQuestController(
+///         storage: SharedPreferencesFocusQuestStorage(),
+///       ),
+///     ),
+///   ],
+///   child: const MyApp(),
+/// )
+/// ```
 final focusQuestControllerProvider = Provider<FocusQuestController>((ref) {
-  return FocusQuestController();
+  final controller = FocusQuestController();
+  ref.onDispose(controller.dispose);
+  return controller;
 });
+
+/// Initializes the shared controller so widgets can await it before use.
+///
+/// Watch it (for example with `ref.watch(focusQuestInitializationProvider)`)
+/// to render a loading or error state while storage is restored. The future
+/// fails with a [FocusQuestException] when initialization does not succeed;
+/// automatic retries are disabled so the failure is reported immediately, and
+/// the host app can retry with `ref.invalidate(focusQuestInitializationProvider)`.
+final focusQuestInitializationProvider = FutureProvider<void>((ref) async {
+  final notifier = ref.read(focusQuestStateProvider.notifier);
+  // The controller notifies synchronously when initialization starts, which
+  // would update the state notifier while this provider is still building.
+  await null;
+  await notifier.initialize();
+  if (!notifier.controller.isInitialized) {
+    throw FocusQuestException(
+      notifier.controller.error ?? 'Focus quest initialization failed.',
+    );
+  }
+}, retry: (retryCount, error) => null);
 
 /// Provides immutable focus state and exposes focus-session actions.
 final focusQuestStateProvider =
@@ -15,6 +54,11 @@ final focusQuestStateProvider =
 
 /// Riverpod notifier that coordinates a [FocusQuestController].
 class FocusQuestNotifier extends Notifier<FocusQuestState> {
+  /// Creates a notifier; Riverpod instantiates it through
+  /// [focusQuestStateProvider].
+  FocusQuestNotifier();
+
+  /// Controller resolved from [focusQuestControllerProvider] in [build].
   late final FocusQuestController controller;
 
   @override

@@ -12,47 +12,61 @@ class FocusQuestExampleApp extends StatefulWidget {
   State<FocusQuestExampleApp> createState() => _FocusQuestExampleAppState();
 }
 
-class _FocusQuestExampleAppState extends State<FocusQuestExampleApp>
-    with WidgetsBindingObserver {
+class _FocusQuestExampleAppState extends State<FocusQuestExampleApp> {
   late final FocusQuestController controller;
+  late final FocusQuestLifecycleObserver lifecycleObserver;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     controller = FocusQuestController(
       storage: SharedPreferencesFocusQuestStorage(
         prefix: 'focus_quest_example',
       ),
+      feedback: const FlutterFocusFeedback(),
     );
-    controller.addListener(() {
-      if (mounted) {
-        setState(() {});
-      }
-    });
+    controller.addListener(_onControllerChanged);
+    // Forwards app lifecycle transitions (inactive, hidden, paused, resumed,
+    // detached) to the controller so the configured background behavior runs.
+    lifecycleObserver = FocusQuestLifecycleObserver(controller)..attach();
     controller.initialize();
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    lifecycleObserver.detach();
+    controller.removeListener(_onControllerChanged);
     controller.dispose();
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive) {
-      controller.handleLifecycleEvent(FocusLifecycleEvent.paused);
-    } else if (state == AppLifecycleState.resumed) {
-      controller.handleLifecycleEvent(FocusLifecycleEvent.resumed);
+  void _onControllerChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    try {
+      await action();
+    } on FocusQuestException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final state = controller.state;
+    final statistics = state.statistics;
+    final isActive =
+        state.status == FocusSessionStatus.running ||
+        state.status == FocusSessionStatus.paused;
+
     return MaterialApp(
       title: 'Focus Quest Example',
       home: Scaffold(
@@ -68,6 +82,13 @@ class _FocusQuestExampleAppState extends State<FocusQuestExampleApp>
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 12),
+                if (state.error != null)
+                  Text(
+                    'Error: ${state.error}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
                 Text(
                   'Status: ${state.status.name}',
                   style: Theme.of(context).textTheme.titleMedium,
@@ -79,44 +100,56 @@ class _FocusQuestExampleAppState extends State<FocusQuestExampleApp>
                 const SizedBox(height: 8),
                 Text('Focused today: ${state.focusedToday.inMinutes} min'),
                 const SizedBox(height: 8),
-                Text('Streak: ${state.currentStreak}'),
+                Text(
+                  'Streak: ${state.currentStreak} (best ${state.longestStreak})',
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Level ${statistics.currentLevel} • '
+                  '${statistics.progressToNextLevel}/'
+                  '${statistics.progressToNextLevel + statistics.experienceToNextLevel} XP',
+                ),
+                const SizedBox(height: 4),
+                LinearProgressIndicator(value: statistics.levelProgress),
                 const SizedBox(height: 16),
                 Wrap(
                   spacing: 12,
                   runSpacing: 12,
                   children: [
                     ElevatedButton(
-                      onPressed: () => controller.start(
-                        duration: const Duration(minutes: 25),
-                        metadata: {'category': 'study'},
-                      ),
+                      onPressed: state.isLoading || isActive
+                          ? null
+                          : () => _run(
+                              () => controller.start(
+                                duration: const Duration(minutes: 25),
+                                metadata: {'category': 'study'},
+                              ),
+                            ),
                       child: const Text('Start'),
                     ),
                     ElevatedButton(
                       onPressed: state.status == FocusSessionStatus.running
-                          ? controller.pause
+                          ? () => _run(controller.pause)
                           : null,
                       child: const Text('Pause'),
                     ),
                     ElevatedButton(
                       onPressed: state.status == FocusSessionStatus.paused
-                          ? controller.resume
+                          ? () => _run(controller.resume)
                           : null,
                       child: const Text('Resume'),
                     ),
                     ElevatedButton(
-                      onPressed:
-                          state.status == FocusSessionStatus.running ||
-                              state.status == FocusSessionStatus.paused
-                          ? controller.complete
+                      onPressed: isActive
+                          ? () => _run(controller.complete)
                           : null,
                       child: const Text('Complete'),
                     ),
                     ElevatedButton(
-                      onPressed:
-                          state.status == FocusSessionStatus.running ||
-                              state.status == FocusSessionStatus.paused
-                          ? () => controller.cancel(reason: 'User cancelled')
+                      onPressed: isActive
+                          ? () => _run(
+                              () => controller.cancel(reason: 'User cancelled'),
+                            )
                           : null,
                       child: const Text('Cancel'),
                     ),
@@ -132,6 +165,9 @@ class _FocusQuestExampleAppState extends State<FocusQuestExampleApp>
                           subtitle: Text(
                             '${session.targetDuration.inMinutes} min • ${session.actualFocusDuration.inMinutes} min focused',
                           ),
+                          trailing: session.reward == null
+                              ? null
+                              : Text('+${session.reward!.points} pts'),
                         ),
                       );
                     }).toList(),

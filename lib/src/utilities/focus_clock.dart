@@ -1,5 +1,8 @@
 /// Supplies the current time for testable session calculations.
 abstract class FocusClock {
+  /// Allows subclasses to declare const constructors.
+  const FocusClock();
+
   /// Returns the current timestamp.
   DateTime now();
 }
