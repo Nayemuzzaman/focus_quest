@@ -1,3 +1,4 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:focus_quest/focus_quest.dart';
 
@@ -344,5 +345,38 @@ void main() {
         expect(restoredEvents.whereType<FocusDailyGoalReachedEvent>(), isEmpty);
       },
     );
+  });
+
+  group('focusQuestEventsProvider', () {
+    test('forwards events from the overridden controller', () async {
+      final clock = FakeFocusClock(initialTime: DateTime(2024, 1, 1, 10));
+      final container = ProviderContainer(
+        overrides: [
+          focusQuestControllerProvider.overrideWith(
+            (ref) => FocusQuestController(clock: clock),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final received = <FocusQuestEvent>[];
+      container.listen<AsyncValue<FocusQuestEvent>>(focusQuestEventsProvider, (
+        _,
+        next,
+      ) {
+        final event = next.value;
+        if (event != null) {
+          received.add(event);
+        }
+      });
+
+      final controller = container.read(focusQuestControllerProvider);
+      await controller.initialize();
+      await controller.start(duration: const Duration(minutes: 25));
+      await Future<void>.delayed(Duration.zero);
+
+      final started = received.whereType<FocusSessionStartedEvent>().single;
+      expect(started.session.startedAt, clock.now());
+    });
   });
 }
