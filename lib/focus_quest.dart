@@ -6,6 +6,7 @@ library;
 
 export 'src/config/focus_quest_config.dart';
 export 'src/controller/focus_quest_controller.dart';
+export 'src/events/focus_quest_event.dart';
 export 'src/exceptions/focus_quest_exception.dart';
 export 'src/feedback/audioplayers_focus_feedback.dart';
 export 'src/feedback/focus_feedback.dart';
