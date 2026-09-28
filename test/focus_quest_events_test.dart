@@ -190,5 +190,159 @@ void main() {
 
       await done;
     });
+
+    test('emits level-up after the completed event', () async {
+      await controller.initialize();
+      await controller.start(duration: const Duration(minutes: 120));
+      clock.advance(const Duration(minutes: 120));
+      await controller.complete();
+      await flushEvents();
+
+      final levelUp = events.whereType<FocusLevelUpEvent>().single;
+      expect(levelUp.previousLevel, 1);
+      expect(levelUp.newLevel, 2);
+      expect(
+        events.indexOf(levelUp),
+        greaterThan(
+          events.indexWhere((event) => event is FocusSessionCompletedEvent),
+        ),
+      );
+    });
+
+    test('does not emit level-up when the level is unchanged', () async {
+      await controller.initialize();
+      await controller.start(duration: const Duration(minutes: 25));
+      clock.advance(const Duration(minutes: 25));
+      await controller.complete();
+      await flushEvents();
+
+      expect(events.whereType<FocusLevelUpEvent>(), isEmpty);
+    });
+
+    test('emits streak increases once per new qualifying day', () async {
+      Future<void> focus(Duration duration) async {
+        await controller.start(duration: duration);
+        clock.advance(duration);
+        await controller.complete();
+      }
+
+      await controller.initialize();
+      await focus(const Duration(minutes: 25));
+      await focus(const Duration(minutes: 25));
+      clock.setNow(DateTime(2024, 1, 2, 10));
+      await focus(const Duration(minutes: 25));
+      await flushEvents();
+
+      final streaks = events.whereType<FocusStreakIncreasedEvent>().toList();
+      expect(
+        streaks.map((event) => (event.previousStreak, event.currentStreak)),
+        [(0, 1), (1, 2)],
+      );
+    });
+
+    test('emits daily goal reached only for the crossing session', () async {
+      controller = buildController(
+        config: const FocusQuestConfig(
+          dailyGoalDuration: Duration(minutes: 30),
+        ),
+      );
+      Future<void> focus(Duration duration) async {
+        await controller.start(duration: duration);
+        clock.advance(duration);
+        await controller.complete();
+      }
+
+      await controller.initialize();
+      await focus(const Duration(minutes: 25));
+      await flushEvents();
+      expect(events.whereType<FocusDailyGoalReachedEvent>(), isEmpty);
+
+      await focus(const Duration(minutes: 10));
+      await focus(const Duration(minutes: 10));
+      await flushEvents();
+
+      final goal = events.whereType<FocusDailyGoalReachedEvent>().single;
+      expect(goal.focusedToday, const Duration(minutes: 35));
+      expect(goal.dailyGoal, const Duration(minutes: 30));
+    });
+
+    test('does not emit milestones for a failed session', () async {
+      controller = buildController(
+        config: const FocusQuestConfig(maxInterruptions: 0),
+      );
+      await controller.initialize();
+      await controller.start(duration: const Duration(minutes: 25));
+      clock.advance(const Duration(minutes: 25));
+      await controller.handleLifecycleEvent(FocusLifecycleEvent.paused);
+      await flushEvents();
+
+      expect(events.whereType<FocusLevelUpEvent>(), isEmpty);
+      expect(events.whereType<FocusStreakIncreasedEvent>(), isEmpty);
+      expect(events.whereType<FocusDailyGoalReachedEvent>(), isEmpty);
+    });
+
+    test(
+      'a subscriber attached before initialize receives a restored completion',
+      () async {
+        await controller.initialize();
+        await controller.start(duration: const Duration(minutes: 25));
+        controller.dispose();
+
+        clock.advance(const Duration(hours: 1));
+        final restoredEvents = <FocusQuestEvent>[];
+        final restored = FocusQuestController(clock: clock, storage: storage);
+        restored.events.listen(restoredEvents.add);
+        await restored.initialize();
+        await flushEvents();
+
+        final completed = restoredEvents
+            .whereType<FocusSessionCompletedEvent>()
+            .single;
+        expect(completed.completedWhileAway, isTrue);
+        expect(completed.session.completedAt, DateTime(2024, 1, 1, 10, 25));
+        expect(completed.occurredAt, DateTime(2024, 1, 1, 11));
+        expect(
+          restoredEvents
+              .whereType<FocusStreakIncreasedEvent>()
+              .single
+              .currentStreak,
+          1,
+        );
+      },
+    );
+
+    test(
+      'a restored session from a previous day does not reach today\'s goal',
+      () async {
+        const config = FocusQuestConfig(
+          dailyGoalDuration: Duration(minutes: 25),
+        );
+        clock.setNow(DateTime(2024, 1, 1, 23));
+        controller = buildController(config: config);
+        await controller.initialize();
+        await controller.start(duration: const Duration(minutes: 25));
+        controller.dispose();
+
+        clock.setNow(DateTime(2024, 1, 2, 9));
+        final restoredEvents = <FocusQuestEvent>[];
+        final restored = FocusQuestController(
+          clock: clock,
+          storage: storage,
+          config: config,
+        );
+        restored.events.listen(restoredEvents.add);
+        await restored.initialize();
+        await flushEvents();
+
+        expect(
+          restoredEvents
+              .whereType<FocusSessionCompletedEvent>()
+              .single
+              .completedWhileAway,
+          isTrue,
+        );
+        expect(restoredEvents.whereType<FocusDailyGoalReachedEvent>(), isEmpty);
+      },
+    );
   });
 }
