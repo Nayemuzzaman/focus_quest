@@ -31,6 +31,7 @@ monitor other installed apps.
 - Configurable background behavior: pause, cancel, or keep running
 - Points, XP, completion bonuses, partial rewards, and custom reward metadata
 - Pluggable level curve with level-up feedback and progress values for XP bars
+- Typed event stream for session transitions, level-ups, streaks, and daily goals
 - Daily goal progress, current streak, longest streak, completion rate, and history
 - In-memory, SharedPreferences-backed, and Hive-backed local persistence
 - Storage abstraction for custom Isar, SQLite, secure storage, or backend adapters
@@ -217,6 +218,55 @@ final controller = FocusQuestController(
 Stored levels are recomputed from total experience during `initialize()`, so
 changing the strategy or upgrading the package keeps profiles consistent.
 
+## Events
+
+`controller.events` is a broadcast stream of sealed `FocusQuestEvent`s, so a
+`switch` over it is exhaustive. Use it to drive your game layer instead of
+comparing state snapshots:
+
+```dart
+controller.events.listen((event) {
+  switch (event) {
+    case FocusSessionCompletedEvent(:final session, :final completedWhileAway):
+      garden.growTree(minutes: session.actualFocusDuration.inMinutes);
+      if (completedWhileAway) showToast('Your tree grew while you were away');
+    case FocusLevelUpEvent(:final newLevel):
+      showToast('Level $newLevel!');
+    case FocusStreakIncreasedEvent(:final currentStreak):
+      showToast('$currentStreak-day streak');
+    case FocusDailyGoalReachedEvent():
+      showToast('Daily goal reached');
+    case FocusSessionStartedEvent() ||
+        FocusSessionPausedEvent() ||
+        FocusSessionResumedEvent() ||
+        FocusSessionCancelledEvent() ||
+        FocusSessionFailedEvent():
+      break;
+  }
+});
+
+await controller.initialize();
+```
+
+- Subscribe **before** `initialize()` to receive the completion of a session
+  that reached its target while the app was not running.
+- Events are emitted after `controller.state` has been updated and before
+  `FocusFeedback` hooks run.
+- For a single session the order is: the session event, then
+  `FocusLevelUpEvent`, `FocusStreakIncreasedEvent`, and
+  `FocusDailyGoalReachedEvent` when they apply.
+- The stream is closed when the controller is disposed.
+
+With Riverpod, listen to `focusQuestEventsProvider`:
+
+```dart
+ref.listen(focusQuestEventsProvider, (_, next) {
+  if (next.value case FocusLevelUpEvent(:final newLevel)) {
+    showToast('Level $newLevel!');
+  }
+});
+```
+
 ## Storage
 
 Use the storage implementation that fits your app:
@@ -337,7 +387,6 @@ Please file feature requests and bugs at the
 
 - Optional adapter packages so the core no longer depends on `audioplayers`,
   Hive, or Riverpod (and can run on the web)
-- Event stream for completed sessions, level-ups, streaks, and daily goals
 - Pomodoro breaks and cycles, auto-resume on foreground, history retention
 - Richer streak policies and calendar rules
 - Share-card helpers for streaks, pets, gardens, and charity progress

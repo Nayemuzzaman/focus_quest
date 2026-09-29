@@ -1,3 +1,15 @@
+## 0.0.4
+
+### Added
+
+* `FocusQuestController.events`: a broadcast stream of sealed `FocusQuestEvent`s for session transitions (`FocusSessionStartedEvent`, `FocusSessionPausedEvent`, `FocusSessionResumedEvent`, `FocusSessionCompletedEvent`, `FocusSessionCancelledEvent`, `FocusSessionFailedEvent`) and milestones (`FocusLevelUpEvent`, `FocusStreakIncreasedEvent`, `FocusDailyGoalReachedEvent`).
+* `FocusSessionCompletedEvent.completedWhileAway` marks sessions that reached their target while the app was not running.
+* `focusQuestEventsProvider` exposes the event stream to Riverpod apps.
+
+### Changed
+
+* `dispose()` now also closes the event stream.
+
 ## 0.0.3
 
 ### Fixed

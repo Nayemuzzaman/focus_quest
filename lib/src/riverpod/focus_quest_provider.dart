@@ -1,4 +1,5 @@
 import 'package:focus_quest/src/controller/focus_quest_controller.dart';
+import 'package:focus_quest/src/events/focus_quest_event.dart';
 import 'package:focus_quest/src/exceptions/focus_quest_exception.dart';
 import 'package:focus_quest/src/models/focus_state.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -45,6 +46,27 @@ final focusQuestInitializationProvider = FutureProvider<void>((ref) async {
     );
   }
 }, retry: (retryCount, error) => null);
+
+/// Streams [FocusQuestEvent]s from the controller in
+/// [focusQuestControllerProvider].
+///
+/// A [StreamProvider] only keeps the latest value, so react to each event with
+/// `ref.listen` rather than `ref.watch`:
+///
+/// ```dart
+/// ref.listen(focusQuestEventsProvider, (_, next) {
+///   switch (next.value) {
+///     case FocusLevelUpEvent(:final newLevel):
+///       showLevelUpToast(newLevel);
+///     case _:
+///       break;
+///   }
+/// });
+/// ```
+final focusQuestEventsProvider = StreamProvider<FocusQuestEvent>(
+  (ref) => ref.watch(focusQuestControllerProvider).events,
+  retry: (retryCount, error) => null,
+);
 
 /// Provides immutable focus state and exposes focus-session actions.
 final focusQuestStateProvider =

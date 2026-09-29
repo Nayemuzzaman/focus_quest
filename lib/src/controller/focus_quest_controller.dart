@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:focus_quest/src/config/focus_quest_config.dart';
+import 'package:focus_quest/src/events/focus_quest_event.dart';
 import 'package:focus_quest/src/exceptions/focus_quest_exception.dart';
 import 'package:focus_quest/src/feedback/focus_feedback.dart';
 import 'package:focus_quest/src/lifecycle/focus_lifecycle.dart';
@@ -58,6 +59,8 @@ class FocusQuestController extends ChangeNotifier {
   _HistoryAggregates? _aggregates;
   List<FocusSession>? _aggregatesSource;
   DateTime? _aggregatesDay;
+  final StreamController<FocusQuestEvent> _events =
+      StreamController<FocusQuestEvent>.broadcast();
 
   /// Current immutable state snapshot.
   FocusQuestState get state => _state;
@@ -81,6 +84,14 @@ class FocusQuestController extends ChangeNotifier {
   /// Current profile snapshot.
   FocusProfile get profile => _profile;
 
+  /// Broadcast stream of session transitions and progress milestones.
+  ///
+  /// Events are emitted after [state] has been updated and before
+  /// [FocusFeedback] hooks run. Subscribe before calling [initialize] to
+  /// receive a completion for a session that finished while the app was not
+  /// running. The stream closes when the controller is disposed.
+  Stream<FocusQuestEvent> get events => _events.stream;
+
   /// Initializes storage and restores persisted sessions/profile state.
   Future<void> initialize() async {
     if (_isLoading) {
@@ -103,10 +114,14 @@ class FocusQuestController extends ChangeNotifier {
           .lastOrNull;
       var completedWhileAway = false;
       var leveledUp = false;
+      FocusSession? restoredCompletion;
+      _ProgressSnapshot? before;
       if (_activeSession != null) {
         final advanced = _advanceSession(_activeSession!, _clock.now());
         if (advanced.status == FocusSessionStatus.completed) {
           completedWhileAway = true;
+          restoredCompletion = advanced;
+          before = _progressSnapshot();
           leveledUp = await _finalizeSession(advanced, completed: true);
         } else {
           _activeSession = advanced;
@@ -117,6 +132,14 @@ class FocusQuestController extends ChangeNotifier {
       _isInitialized = true;
       _syncState();
       if (completedWhileAway) {
+        _publishFinalized(
+          FocusSessionCompletedEvent(
+            session: restoredCompletion!,
+            occurredAt: _clock.now(),
+            completedWhileAway: true,
+          ),
+          before!,
+        );
         await _notifyFeedback(_feedback.onSessionCompleted);
         if (leveledUp) {
           await _notifyFeedback(_feedback.onLevelUp);
@@ -162,6 +185,7 @@ class FocusQuestController extends ChangeNotifier {
     _activeSession = session;
     _startTickerIfNeeded();
     _syncState();
+    _emit(FocusSessionStartedEvent(session: session, occurredAt: now));
     await _notifyFeedback(_feedback.onSessionStarted);
   }
 
@@ -182,6 +206,7 @@ class FocusQuestController extends ChangeNotifier {
     await _persistSession(updated);
     _stopTicker();
     _syncState();
+    _emit(FocusSessionPausedEvent(session: updated, occurredAt: _clock.now()));
     await _notifyFeedback(_feedback.onSessionPaused);
   }
 
@@ -202,6 +227,7 @@ class FocusQuestController extends ChangeNotifier {
     await _persistSession(updated);
     _startTickerIfNeeded();
     _syncState();
+    _emit(FocusSessionResumedEvent(session: updated, occurredAt: now));
     await _notifyFeedback(_feedback.onSessionResumed);
   }
 
@@ -224,9 +250,14 @@ class FocusQuestController extends ChangeNotifier {
     final updated = completed.copyWith(
       reward: _rewardStrategy.calculate(completed, config),
     );
+    final before = _progressSnapshot();
     final leveledUp = await _finalizeSession(updated, completed: true);
     _stopTicker();
     _syncState();
+    _publishFinalized(
+      FocusSessionCompletedEvent(session: updated, occurredAt: now),
+      before,
+    );
     await _notifyFeedback(_feedback.onSessionCompleted);
     if (leveledUp) {
       await _notifyFeedback(_feedback.onLevelUp);
@@ -253,9 +284,14 @@ class FocusQuestController extends ChangeNotifier {
     final updated = cancelled.copyWith(
       reward: _rewardStrategy.calculate(cancelled, config),
     );
+    final before = _progressSnapshot();
     final leveledUp = await _finalizeSession(updated, completed: false);
     _stopTicker();
     _syncState();
+    _publishFinalized(
+      FocusSessionCancelledEvent(session: updated, occurredAt: now),
+      before,
+    );
     await _notifyFeedback(_feedback.onSessionCancelled);
     if (leveledUp) {
       await _notifyFeedback(_feedback.onLevelUp);
@@ -266,14 +302,17 @@ class FocusQuestController extends ChangeNotifier {
   Future<void> reset() async {
     _guardInitialized();
     final active = _activeSession;
+    FocusSession? resetSession;
+    _ProgressSnapshot? before;
     if (active != null && _isActive(active)) {
       final now = _clock.now();
-      final resetSession = _advanceSession(active, now).copyWith(
+      resetSession = _advanceSession(active, now).copyWith(
         status: FocusSessionStatus.cancelled,
         completedAt: now,
         failureReason: 'Session reset.',
         reward: const FocusReward(points: 0, experience: 0),
       );
+      before = _progressSnapshot();
       await _finalizeSession(resetSession, completed: false);
     } else {
       _activeSession = null;
@@ -281,6 +320,15 @@ class FocusQuestController extends ChangeNotifier {
     _error = null;
     _stopTicker();
     _syncState();
+    if (resetSession != null && before != null) {
+      _publishFinalized(
+        FocusSessionCancelledEvent(
+          session: resetSession,
+          occurredAt: resetSession.completedAt ?? _clock.now(),
+        ),
+        before,
+      );
+    }
   }
 
   /// Recomputes statistics from the current in-memory state.
@@ -289,10 +337,11 @@ class FocusQuestController extends ChangeNotifier {
     _syncState();
   }
 
-  /// Disposes timers and listener resources.
+  /// Disposes timers, closes [events], and releases listener resources.
   @override
   void dispose() {
     _stopTicker();
+    unawaited(_events.close());
     super.dispose();
   }
 
@@ -378,9 +427,14 @@ class FocusQuestController extends ChangeNotifier {
       failureReason: reason,
       reward: const FocusReward(points: 0, experience: 0),
     );
+    final before = _progressSnapshot();
     await _finalizeSession(updated, completed: false);
     _stopTicker();
     _syncState();
+    _publishFinalized(
+      FocusSessionFailedEvent(session: updated, occurredAt: now),
+      before,
+    );
   }
 
   FocusSession _advanceSession(FocusSession session, DateTime now) {
@@ -710,9 +764,17 @@ class FocusQuestController extends ChangeNotifier {
     } else {
       _isCompletingFromTick = true;
       try {
+        final before = _progressSnapshot();
         final leveledUp = await _finalizeSession(advanced, completed: true);
         _stopTicker();
         _syncState();
+        _publishFinalized(
+          FocusSessionCompletedEvent(
+            session: advanced,
+            occurredAt: _clock.now(),
+          ),
+          before,
+        );
         await _notifyFeedback(_feedback.onSessionCompleted);
         if (leveledUp) {
           await _notifyFeedback(_feedback.onLevelUp);
@@ -723,6 +785,61 @@ class FocusQuestController extends ChangeNotifier {
       return;
     }
     _syncState();
+  }
+
+  void _emit(FocusQuestEvent event) {
+    if (!_events.isClosed) {
+      _events.add(event);
+    }
+  }
+
+  /// Progress values compared before and after a session is finalized to
+  /// detect milestones.
+  _ProgressSnapshot _progressSnapshot() {
+    final aggregates = _historyAggregates();
+    return (
+      level: _profile.currentLevel,
+      streak: aggregates.currentStreak,
+      focusedToday: aggregates.focusedToday,
+    );
+  }
+
+  /// Emits the event for a session that has just been finalized, followed by
+  /// any milestones it caused relative to [before].
+  void _publishFinalized(FocusSessionEvent event, _ProgressSnapshot before) {
+    _emit(event);
+    final after = _progressSnapshot();
+    final occurredAt = event.occurredAt;
+    if (after.level > before.level) {
+      _emit(
+        FocusLevelUpEvent(
+          previousLevel: before.level,
+          newLevel: after.level,
+          occurredAt: occurredAt,
+        ),
+      );
+    }
+    if (after.streak > before.streak) {
+      _emit(
+        FocusStreakIncreasedEvent(
+          previousStreak: before.streak,
+          currentStreak: after.streak,
+          occurredAt: occurredAt,
+        ),
+      );
+    }
+    final goal = config.dailyGoalDuration;
+    if (goal > Duration.zero &&
+        before.focusedToday < goal &&
+        after.focusedToday >= goal) {
+      _emit(
+        FocusDailyGoalReachedEvent(
+          focusedToday: after.focusedToday,
+          dailyGoal: goal,
+          occurredAt: occurredAt,
+        ),
+      );
+    }
   }
 
   /// Runs a feedback [hook] without letting its failure affect session state.
@@ -741,6 +858,8 @@ class FocusQuestController extends ChangeNotifier {
     }
   }
 }
+
+typedef _ProgressSnapshot = ({int level, int streak, Duration focusedToday});
 
 class _HistoryAggregates {
   const _HistoryAggregates({
